@@ -1,8 +1,15 @@
+import { constants } from "./constants.js"
+
+
+
 export default class Controller {
 	#users = new Map()
+	#rooms = new Map()
+
 	constructor({ socketServer }) {
 		this.socketServer = socketServer
 	}
+
 	onNewConnection(socket) {
 		const { id } = socket
 		console.log('connection stablished with', id)
@@ -14,15 +21,61 @@ export default class Controller {
 		socket.on('end', this.#onSocketClosed(id))
 	}
 
+	async joinRoom(socketId, data) {
+		const userData = data
+		console.log(`${userData.userName} joined! ${[socketId]}`)
+		const {roomId} = userData
+		const user = this.#updateGlobalUserData(socketId, userData)
+
+		const users = this.#joinUserOnRoom(roomId, user)
+		const currentUsers = Array.from(users.values()).map(({id, userName}) => ({userName, id}))
+
+		// Atualiza o usuario que se conectou sobre quais 
+		// usuarios já estão conectados na mesma sala
+		this.socketServer.sendMessage(user.socket, constants.event.UPDATE_USERS, currentUsers)
+
+		// Avisa a rede inteira que o novo usuario conectou-se
+		this.broadcast({
+			socketId,
+			roomId, 
+			message: {id: socketId, userName: userData.userName},
+			event: constants.event.NEW_USER_CONNECTED,
+		})
+	}
+
+	broadcast({ socketId, roomId, event, message, includeCurrentSocket = false }){
+		const usersOnRoom = this.#rooms.get(roomId)
+
+		for(const [key, user] of usersOnRoom){
+			if(!includeCurrentSocket && key === socketId) continue
+
+			this.socketServer.sendMessage(user.socket, event, message)
+		}
+
+	}
+
+	#joinUserOnRoom(roomId, user) {
+		const usersOnRoom = this.#rooms.get(roomId) ?? new Map()
+		usersOnRoom.set(user.id, user)
+		this.#rooms.set(roomId, usersOnRoom)
+
+		return usersOnRoom
+	}
+
 	#onSocketData(id) {
 		return (data) => {
-			console.log('onSocketData', data.toString())
+			try {
+				const {event, message} = JSON.parse(data)
+				this[event](id, message)
+			} catch (error) {
+				console.error(`wrong event format!!`, data.toString())				
+			}
 		}
 	}
 
 	#onSocketClosed(id) {
 		return (data) => {
-			console.log('onSocketClosed', data.toString())
+			console.log('onSocketClosed', id)
 		}
 	}
 
